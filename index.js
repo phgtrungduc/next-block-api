@@ -1,7 +1,15 @@
 import express from 'express';
 import fetch from 'node-fetch';  // Now using ES module import
-import { Keypair, PublicKey, Transaction, SystemProgram, TransactionInstruction} from '@solana/web3.js';
+import { Keypair, PublicKey, Transaction, SystemProgram, TransactionInstruction, Connection} from '@solana/web3.js';
 import cors from 'cors';
+import bs58 from "bs58";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountInstruction,
+  createTransferInstruction,
+  getAssociatedTokenAddress,
+  getOrCreateAssociatedTokenAccount,
+} from "@solana/spl-token";
 
 const app = express();
 app.use(cors());
@@ -24,6 +32,13 @@ const EVENT_AUTHORITY = new PublicKey(
   process.env.EVENT_AUTHORITY || "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1"
 );
 
+const DEFAULT_HELIUS_MOON = [
+  "9af21197-faa1-45de-bd64-f08b576e491b",
+  "aebc66b8-9006-4d3b-9384-e58faa64e7ef",
+];
+export const RPC_HTTP_URL = `https://staked.helius-rpc.com?api-key=${DEFAULT_HELIUS_MOON[0]}`;
+
+const connection = new Connection(RPC_HTTP_URL || "");
 // Middleware to parse JSON body
 app.use(express.json());
 
@@ -138,7 +153,7 @@ async function buyWithNextBlockv2(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "your-authorization-token",
+        "Authorization": "entry1730832791-bN14n%2BFtqfPJqWXWtXteSftVdzUt5yHH7ACRmoRtCvk%3D",
       },
       body: JSON.stringify(payload),
     });
@@ -154,33 +169,25 @@ async function buyWithNextBlockv2(
     const responseData = await response.json();
     console.log("Transaction submitted successfully:", responseData);
 
-    const txSignature = responseData?.signature;
-    if (txSignature) {
-      log(
-        `${ownerStr} Buy transaction signature  ${createHyperlink(
-          `https://solscan.io/tx/${txSignature}`,
-          txSignature
-        )}`,
-        "SUCCESS"
-      );
-      console.log(`View transaction details: https://solscan.io/tx/${txSignature}`);
+    return {
+      isSucess: true,
+      txSignature : responseData?.signature,
     }
   } catch (error) {
-    log(`${ownerStr} Buy transaction fail  ${error}`, "SUCCESS");
-    console.error(ownerStr, "- Error in buy function:", error);
+    throw error;
   }
 }
 
 // Express route to handle POST request
 app.post('/buy', async (req, res) => {
   const {
-    mintStr, solIn, slippageDecimal, secretKey, virtualSolReserves, virtualTokenReserves,
+    mintStr, solIn, slippageDecimal, privateKey, virtualSolReserves, virtualTokenReserves,
     coinDataMint, bonding_curve, associated_bonding_curve, tipAmount,
   } = req.body;
 
   try {
-    const keyPair = Keypair.fromSecretKey(Uint8Array.from(secretKey));
-    await buyWithNextBlockv2(
+    const keyPair = await getKeyPair(privateKey);
+    var result = await buyWithNextBlockv2(
       mintStr,
       solIn,
       slippageDecimal,
@@ -190,14 +197,12 @@ app.post('/buy', async (req, res) => {
       coinDataMint,
       bonding_curve,
       associated_bonding_curve,
-      tipAmount,
-      logCallback
+      tipAmount
     );
-
-    res.status(200).json({ message: 'Transaction submitted successfully' });
+    res.status(200).json(result);
   } catch (error) {
     console.error('Error in buy request:', error);
-    res.status(500).json({ error: 'Error processing buy request', details: error.message });
+    res.status(500).json({ isSucess: false, error: error });
   }
 });
 app.get("/ping", (req, res) => {
@@ -209,3 +214,41 @@ const port = process.env.PORT || 8080;
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
+
+
+function getKeyPair(privateKey){
+  return new Promise((resolve, reject) => {
+    try {
+      let privateKeyBytes;
+
+      if (/^[0-9a-fA-F]+$/.test(privateKey)) {
+        // Handle hexadecimal encoded private key
+        privateKeyBytes = Uint8Array.from(Buffer.from(privateKey, "hex"));
+      } else {
+        // Assume base58 encoding
+        privateKeyBytes = bs58.decode(privateKey);
+      }
+
+      // Ensure the private key has a valid length
+      if (privateKeyBytes.length !== 32 && privateKeyBytes.length !== 64) {
+        throw new Error("Invalid private key length. Must be 32 or 64 bytes.");
+      }
+
+      // Create and resolve the Keypair
+      const keypair = Keypair.fromSecretKey(privateKeyBytes);
+      resolve(keypair);
+    } catch (error) {
+      console.error("Error creating Keypair:", error);
+      reject(error);
+    }
+  });
+}
+
+function packIntegers(integers) {
+  const binarySegments = new Uint8Array(new ArrayBuffer(integers.length * 8));
+  integers.forEach((integer, index) => {
+    const view = new DataView(binarySegments.buffer);
+    view.setBigUint64(index * 8, integer, true);
+  });
+  return Buffer.from(binarySegments);
+}
